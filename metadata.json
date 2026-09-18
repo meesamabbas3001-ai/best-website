@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Talent & ATS",
+  "description": "Enterprise Client Portal and AI-Powered Applicant Tracking System",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
