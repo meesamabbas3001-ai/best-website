@@ -42,7 +42,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Candidate resume text is required.' });
     }
 
-    const prompt = `You are a senior, world-class Enterprise AI Applicant Tracking System (ATS) Evaluator and Executive Career Strategist.
+    if (resumeText.length > 25000) {
+      return res.status(400).json({ error: 'Resume text exceeds maximum length limit of 25,000 characters.' });
+    }
+
+    if (jobDescription && typeof jobDescription === 'string' && jobDescription.length > 15000) {
+      return res.status(400).json({ error: 'Job description exceeds maximum length limit of 15,000 characters.' });
+    }
+
+    const prompt = `You are a senior Enterprise AI Applicant Tracking System (ATS) Evaluator for Recruitz Solution.
 Perform a rigorous, objective ATS analysis of the provided candidate resume text.
 
 TARGET INDUSTRY: ${targetIndustry || 'Information Technology'}
@@ -54,13 +62,15 @@ ${jobDescription || 'No specific job description provided. Perform general emplo
 CANDIDATE RESUME TEXT:
 ${resumeText}
 
-EVALUATION GUIDELINES:
-1. NON-DISCRIMINATION: Focus exclusively on job-relevant skills, experience, education, projects, certifications, and capabilities.
-2. NO FABRICATION: Do NOT invent companies, credentials, years of experience, or degrees not present in the resume. Return "Not specified" where information is missing.
-3. IMPROVED PROFESSIONAL SUMMARY: Generate an improved 3-line professional summary based ONLY on information explicitly present in the resume.
-4. PAKISTAN & GLOBAL CAREER OPPORTUNITIES: Recommend realistic career paths and industry sectors in the Pakistan job market and Global/Remote pathways. Do NOT fake live vacancies.
-5. RESUME ISSUES: Identify specific ATS issues (e.g. unclear title, missing keywords, vague responsibilities, formatting/structure problems) with severity (High/Medium/Low), Problem, Why it matters, and How to improve it.
-6. RESUME REWRITES: Provide section-by-section current problem vs recommended version without inventing facts.
+CRITICAL ANTI-HALLUCINATION & EVALUATION GUIDELINES:
+1. NEVER FABRICATE: Do NOT invent companies, degrees, certifications, years of experience, titles, or achievements not present in the resume.
+2. MISSING DATA HANDLING: If information is missing from the resume, explicitly return "Not found in the provided resume."
+3. MISSING JD DATA HANDLING: If job description is missing or lacks specific criteria, explicitly return "Not specified in the provided job description."
+4. LIVE VACANCY HONESTY: For Pakistan Opportunities and Global Remote Opportunities, recommend relevant career directions and industry categories. Always clarify: "Career-market guidance, not live vacancy data. Live vacancy information is not connected."
+5. SKILL GAP RULE: Under recommended skills, include the wording principle: "Add this skill only if you genuinely possess it."
+6. NON-DISCRIMINATION: Focus exclusively on job-relevant skills, experience, education, projects, certifications, and capabilities.
+7. IMPROVED SUMMARY: Generate an improved 3-line professional summary based strictly ONLY on facts provided in the resume.
+8. ATS ISSUES & REWRITES: Provide specific problem, severity (High/Medium/Low), why it matters, and recommended improvements without inventing facts.
 
 Return JSON strictly matching the schema.`;
 

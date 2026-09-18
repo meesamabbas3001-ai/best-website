@@ -1,6 +1,7 @@
 {
-  "name": "Nexus Talent & ATS",
-  "description": "Enterprise Client Portal and AI-Powered Applicant Tracking System",
+  "name": "Recruitz Solution",
+  "description": "Recruitment, Staffing, Inclusive PWD & Deaf Hiring, UK Services & AI ATS Resume Analyzer",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
+
