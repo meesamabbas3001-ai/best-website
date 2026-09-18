@@ -1,43 +1,48 @@
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
-
-  app.use(express.json({ limit: '10mb' }));
-
-  // Initialize Gemini AI client on server side
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
     },
-  });
+  },
+});
 
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', service: 'Nexus Talent ATS API', timestamp: new Date().toISOString() });
-  });
-
-  // Enterprise AI ATS Resume Evaluation Endpoint
-  app.post('/api/ats/evaluate', async (req, res) => {
+async function generateWithRetry(fn: () => Promise<any>, maxRetries = 3) {
+  let lastErr: any;
+  for (let i = 0; i < maxRetries; i++) {
     try {
-      const { targetIndustry, resumeText, jobDescription, analysisSettings } = req.body;
-
-      if (!resumeText || typeof resumeText !== 'string' || !resumeText.trim()) {
-        return res.status(400).json({ error: 'Candidate resume text is required.' });
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (i < maxRetries - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * (i + 1)));
       }
+    }
+  }
+  throw lastErr;
+}
 
-      const prompt = `You are a senior, world-class Enterprise AI Applicant Tracking System (ATS) Evaluator and Executive Career Strategist.
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed. Use POST.' });
+  }
+
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { targetIndustry, resumeText, jobDescription } = body || {};
+
+    if (!resumeText || typeof resumeText !== 'string' || !resumeText.trim()) {
+      return res.status(400).json({ error: 'Candidate resume text is required.' });
+    }
+
+    const prompt = `You are a senior, world-class Enterprise AI Applicant Tracking System (ATS) Evaluator and Executive Career Strategist.
 Perform a rigorous, objective ATS analysis of the provided candidate resume text.
 
 TARGET INDUSTRY: ${targetIndustry || 'Information Technology'}
@@ -59,7 +64,8 @@ EVALUATION GUIDELINES:
 
 Return JSON strictly matching the schema.`;
 
-      const response = await ai.models.generateContent({
+    const response = await generateWithRetry(() =>
+      ai.models.generateContent({
         model: 'gemini-3.6-flash',
         contents: prompt,
         config: {
@@ -358,39 +364,18 @@ Return JSON strictly matching the schema.`;
             ]
           }
         }
-      });
+      })
+    );
 
-      const jsonText = response.text?.trim() || '{}';
-      const parsedData = JSON.parse(jsonText);
+    const jsonText = response.text?.trim() || '{}';
+    const parsedData = JSON.parse(jsonText);
 
-      return res.json(parsedData);
-    } catch (err: any) {
-      console.error('Error during Gemini ATS evaluation:', err);
-      return res.status(500).json({
-        error: 'Failed to process ATS evaluation.',
-        details: err.message || 'AI service endpoint error'
-      });
-    }
-  });
-
-  // Vite development middleware or static production serving
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    return res.status(200).json(parsedData);
+  } catch (err: any) {
+    console.error('Error during Gemini ATS evaluation:', err);
+    return res.status(500).json({
+      error: 'Failed to process ATS evaluation.',
+      details: err.message || 'AI service endpoint error'
     });
   }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Nexus Server listening on http://0.0.0.0:${PORT}`);
-  });
 }
-
-startServer();
