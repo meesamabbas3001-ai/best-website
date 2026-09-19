@@ -10,19 +10,38 @@ const ai = new GoogleGenAI({
   },
 });
 
-async function generateWithRetry(fn: () => Promise<any>, maxRetries = 3) {
-  let lastErr: any;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastErr = err;
-      if (i < maxRetries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1500 * (i + 1)));
+const CANDIDATE_MODELS = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+
+async function generateContentWithFallback(prompt: string, config: any) {
+  let lastError: any;
+  for (const model of CANDIDATE_MODELS) {
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        return await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config,
+        });
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = String(err?.message || err);
+        const isTransient =
+          errMsg.includes('503') ||
+          errMsg.includes('UNAVAILABLE') ||
+          errMsg.includes('high demand') ||
+          errMsg.includes('429') ||
+          errMsg.includes('RESOURCE_EXHAUSTED') ||
+          errMsg.includes('Overloaded');
+
+        if (isTransient && retry < 2) {
+          await new Promise((res) => setTimeout(res, (retry + 1) * 2000));
+          continue;
+        }
+        break;
       }
     }
   }
-  throw lastErr;
+  throw lastError;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -64,14 +83,10 @@ TASK:
 
 Return JSON matching the schema strictly.`;
 
-    const response = await generateWithRetry(() =>
-      ai.models.generateContent({
-        model: 'gemini-3.6-flash',
-        contents: prompt,
-        config: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseSchema: {
+    const response = await generateContentWithFallback(prompt, {
+      temperature: 0.2,
+      responseMimeType: 'application/json',
+      responseSchema: {
             type: Type.OBJECT,
             properties: {
               candidateInfo: {
@@ -154,8 +169,7 @@ Return JSON matching the schema strictly.`;
             required: ['candidateInfo', 'analysis']
           }
         }
-      })
-    );
+      );
 
     const jsonText = response.text?.trim() || '{}';
     const parsedData = JSON.parse(jsonText);

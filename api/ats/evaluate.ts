@@ -10,19 +10,39 @@ const ai = new GoogleGenAI({
   },
 });
 
-async function generateWithRetry(fn: () => Promise<any>, maxRetries = 3) {
-  let lastErr: any;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastErr = err;
-      if (i < maxRetries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1500 * (i + 1)));
+const CANDIDATE_MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
+
+async function generateContentWithFallback(prompt: string, config: any) {
+  let lastError: any;
+  for (const model of CANDIDATE_MODELS) {
+    for (let retry = 0; retry < 2; retry++) {
+      try {
+        return await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config,
+        });
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = String(err?.message || err);
+        const isTransient =
+          errMsg.includes('503') ||
+          errMsg.includes('UNAVAILABLE') ||
+          errMsg.includes('high demand') ||
+          errMsg.includes('429') ||
+          errMsg.includes('RESOURCE_EXHAUSTED') ||
+          errMsg.includes('Overloaded');
+
+        if (isTransient && retry < 1) {
+          await new Promise((res) => setTimeout(res, 1000));
+          continue;
+        }
+        console.warn(`Model ${model} failed (${errMsg}). Trying next candidate...`);
+        break;
       }
     }
   }
-  throw lastErr;
+  throw lastError;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -51,7 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const prompt = `You are a senior Enterprise AI Applicant Tracking System (ATS) Evaluator for Recruitz Solution.
-Perform a rigorous, objective ATS analysis of the provided candidate resume text.
+Perform a fast, deterministic, evidence-based ATS Compatibility & Job Match Analysis of the provided candidate resume text against the target job requirements.
 
 TARGET INDUSTRY: ${targetIndustry || 'Information Technology'}
 TARGET JOB DESCRIPTION PROVIDED: ${jobDescription ? 'YES' : 'NO'}
@@ -62,26 +82,24 @@ ${jobDescription || 'No specific job description provided. Perform general emplo
 CANDIDATE RESUME TEXT:
 ${resumeText}
 
-CRITICAL ANTI-HALLUCINATION & EVALUATION GUIDELINES:
-1. NEVER FABRICATE: Do NOT invent companies, degrees, certifications, years of experience, titles, or achievements not present in the resume.
-2. MISSING DATA HANDLING: If information is missing from the resume, explicitly return "Not found in the provided resume."
-3. MISSING JD DATA HANDLING: If job description is missing or lacks specific criteria, explicitly return "Not specified in the provided job description."
-4. LIVE VACANCY HONESTY: For Pakistan Opportunities and Global Remote Opportunities, recommend relevant career directions and industry categories. Always clarify: "Career-market guidance, not live vacancy data. Live vacancy information is not connected."
-5. SKILL GAP RULE: Under recommended skills, include the wording principle: "Add this skill only if you genuinely possess it."
-6. NON-DISCRIMINATION: Focus exclusively on job-relevant skills, experience, education, projects, certifications, and capabilities.
-7. IMPROVED SUMMARY: Generate an improved 3-line professional summary based strictly ONLY on facts provided in the resume.
-8. ATS ISSUES & REWRITES: Provide specific problem, severity (High/Medium/Low), why it matters, and recommended improvements without inventing facts.
+STRICT EVIDENCE-BASED & ACCURACY RULES:
+1. NEVER FABRICATE: Do NOT invent companies, degrees, certifications, years of experience, titles, skills, or achievements not present in the resume.
+2. EVIDENCE-BASED KEYWORD MATCHING: For keywords, explicitly categorize matching status:
+   - "CONFIRMED_FROM_CV": Explicitly written in the candidate's CV text (indicate section found e.g., "Skills section", "Work experience").
+   - "INFERRED_RELATED": Related experience implied by context, but NOT explicitly written as a keyword. NEVER convert an inferred skill into a confirmed skill.
+   - "NOT_FOUND": Missing from the CV text.
+3. MISSING KEYWORDS PRIORITIZATION: Separate missing keywords into "highPriorityMissing" (core job requirements) and "otherGaps".
+4. TRUTHFUL RECOMMENDATIONS: For any recommended skill/keyword, include the explicit advice: "Only add this if you genuinely have this skill or experience." Do NOT encourage keyword stuffing.
+5. EXPLAINABLE ATS COMPATIBILITY SCORE (0-100): Calculate an objective score based on keyword match, skill alignment, experience fit, structure, and impact.
+6. SUPPORTED CV PROBLEMS: Report only genuine problems found in the CV text (e.g., missing metrics, missing dates, unformatted bullet points). Do not invent issues.
+7. NON-DISCRIMINATION: Focus exclusively on job-relevant skills, experience, education, projects, certifications, and capabilities.
 
 Return JSON strictly matching the schema.`;
 
-    const response = await generateWithRetry(() =>
-      ai.models.generateContent({
-        model: 'gemini-3.6-flash',
-        contents: prompt,
-        config: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseSchema: {
+    const response = await generateContentWithFallback(prompt, {
+      temperature: 0.0,
+      responseMimeType: 'application/json',
+      responseSchema: {
             type: Type.OBJECT,
             properties: {
               candidateProfile: {
@@ -202,7 +220,22 @@ Return JSON strictly matching the schema.`;
                   missingKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
                   recommendedKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
                   importantSkillsFound: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  importantSkillsMissing: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  importantSkillsMissing: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  highPriorityMissing: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  otherGaps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  keywordEvidence: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        keyword: { type: Type.STRING },
+                        matchType: { type: Type.STRING, description: 'CONFIRMED_FROM_CV, INFERRED_RELATED, or NOT_FOUND' },
+                        sectionFound: { type: Type.STRING },
+                        reason: { type: Type.STRING }
+                      },
+                      required: ['keyword', 'matchType']
+                    }
+                  }
                 },
                 required: [
                   'matchedKeywords',
@@ -374,18 +407,17 @@ Return JSON strictly matching the schema.`;
             ]
           }
         }
-      })
-    );
+      );
 
     const jsonText = response.text?.trim() || '{}';
     const parsedData = JSON.parse(jsonText);
 
     return res.status(200).json(parsedData);
   } catch (err: any) {
-    console.error('Error during Gemini ATS evaluation:', err);
+    console.warn('Gemini ATS evaluation endpoint fallback notice:', err?.message || err);
     return res.status(500).json({
-      error: 'Failed to process ATS evaluation.',
-      details: err.message || 'AI service endpoint error'
+      error: 'AI service temporarily unavailable due to high demand.',
+      details: err?.message || 'AI service endpoint error'
     });
   }
 }

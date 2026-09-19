@@ -6,6 +6,9 @@ import { defineConfig, Plugin } from 'vite';
 import healthHandler from './api/health.ts';
 import evaluateHandler from './api/ats/evaluate.ts';
 import analyzeHandler from './api/ats/analyze.ts';
+import paypalConfigHandler from './api/paypal/config.ts';
+import paypalCreateOrderHandler from './api/paypal/create-order.ts';
+import paypalCaptureOrderHandler from './api/paypal/capture-order.ts';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,6 +68,12 @@ function apiRoutesPlugin(): Plugin {
             return await evaluateHandler(vercelReq as any, vercelRes as any);
           } else if (url === '/api/ats/analyze') {
             return await analyzeHandler(vercelReq as any, vercelRes as any);
+          } else if (url === '/api/paypal/config') {
+            return await paypalConfigHandler(vercelReq as any, vercelRes as any);
+          } else if (url === '/api/paypal/create-order') {
+            return await paypalCreateOrderHandler(vercelReq as any, vercelRes as any);
+          } else if (url === '/api/paypal/capture-order') {
+            return await paypalCaptureOrderHandler(vercelReq as any, vercelRes as any);
           }
         } catch (err: any) {
           console.error(`Dev API Error [${url}]:`, err);

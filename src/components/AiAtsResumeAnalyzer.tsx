@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { evaluateResumeViaAi } from '../services/api';
 import { AtsEvaluationResult } from '../types';
+import { PayPalPaymentModal } from './PayPalPaymentModal';
+import { ProfessionalCvModal } from './ProfessionalCvModal';
 
 const INDUSTRY_OPTIONS = [
   'Information Technology',
@@ -50,18 +52,41 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
   const [result, setResult] = useState<AtsEvaluationResult | null>(null);
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
 
+  // Payment Modal State
+  const [showPaymentModal, setShowPaymentModal] = useState<boolean>(false);
+  const [paymentConfirmation, setPaymentConfirmation] = useState<{ orderId: string; captureId: string; isDemo: boolean } | null>(null);
+
+  // CV Optimization Modal State
+  const [showCvOptimizationModal, setShowCvOptimizationModal] = useState<boolean>(false);
+  const cvOptimizationRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollToCvOptimization = () => {
+    cvOptimizationRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   // File Upload Handler (reads plain text files in browser locally)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploadedFileName(file.name);
+    setError(null);
     const reader = new FileReader();
 
     reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        setResumeText(content);
+      const rawContent = event.target?.result as string;
+      if (rawContent) {
+        // Sanitize & extract printable words
+        const cleaned = rawContent.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ');
+        const wordCount = cleaned.split(/\s+/).filter(w => w.length > 1).length;
+        
+        if (wordCount < 15) {
+          setError("We couldn't reliably read text from this file. Please upload a text-based PDF or DOCX, or paste your CV text directly.");
+          setResumeText('');
+          return;
+        }
+
+        setResumeText(cleaned);
       }
     };
 
@@ -72,39 +97,62 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
     reader.readAsText(file);
   };
 
-  // Run Evaluation
-  const handleRunEvaluation = async (e: React.FormEvent) => {
+  // STEP 2: Triggered when user clicks "Run Enterprise ATS Evaluation" button
+  const handleRunEvaluation = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resumeText.trim()) {
-      setError('Please upload or paste your resume first.');
+    const wordCount = resumeText.trim().split(/\s+/).filter(Boolean).length;
+    if (!resumeText.trim() || wordCount < 15) {
+      setError("We couldn't reliably read this CV. Please upload or paste a text-based CV first (at least 15 words).");
       return;
     }
 
     setError(null);
+    // Open payment modal FIRST instead of running evaluation directly
+    setShowPaymentModal(true);
+  };
+
+  // STEP 5: Executed ONLY AFTER successful payment verification
+  const executeAtsEvaluation = async () => {
+    setShowPaymentModal(false);
+    
+    // Validate text sufficiency before calling evaluation
+    const wordCount = resumeText.trim().split(/\s+/).filter(Boolean).length;
+    if (wordCount < 15) {
+      setError("We couldn't reliably read this CV. Please upload a text-based PDF or DOCX, or paste the text directly.");
+      return;
+    }
+
     setIsLoading(true);
     setCurrentStepIndex(0);
 
-    // Animate loading steps sequentially
+    // Smooth step progress animation (~400ms per step)
     const stepInterval = setInterval(() => {
       setCurrentStepIndex((prev) => {
         if (prev < ANALYSIS_STEPS.length - 1) return prev + 1;
         return prev;
       });
-    }, 650);
+    }, 400);
 
     try {
       const data = await evaluateResumeViaAi(targetIndustry, resumeText, jobDescription);
       clearInterval(stepInterval);
       setCurrentStepIndex(ANALYSIS_STEPS.length - 1);
-      setTimeout(() => {
-        setResult(data);
-        setIsLoading(false);
-      }, 400);
+      setResult(data);
+      setIsLoading(false);
     } catch (err: any) {
       clearInterval(stepInterval);
       setIsLoading(false);
       setError(err.message || 'An error occurred during evaluation. Please try again.');
     }
+  };
+
+  const handlePaymentSuccess = () => {
+    executeAtsEvaluation();
+  };
+
+  const handlePaymentCancel = () => {
+    setShowPaymentModal(false);
+    // Preserves all entered form information
   };
 
   const resetForm = () => {
@@ -381,6 +429,13 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
               </div>
               <div className="flex items-center space-x-3">
                 <button
+                  onClick={scrollToCvOptimization}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20 border border-emerald-400/30 transition-all flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-white" />
+                  <span>Optimize My CV</span>
+                </button>
+                <button
                   onClick={resetForm}
                   className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors flex items-center space-x-2 cursor-pointer"
                 >
@@ -398,29 +453,40 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
             </div>
 
             {/* OVERALL ATS SCORE CARD */}
-            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 sm:p-8 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6">
-              <div className="space-y-2 text-center md:text-left">
-                <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 font-semibold uppercase tracking-wide">
-                  Candidate Profile Identified
-                </span>
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                  {result.candidateProfile.candidateName}
-                </h2>
-                <p className="text-sm text-indigo-400 font-medium">
-                  {result.candidateProfile.professionalTitle} • {result.candidateProfile.yearsOfExperience}
-                </p>
-                <p className="text-xs text-slate-400">
-                  {result.scoreExplanation}
-                </p>
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 sm:p-8 shadow-xl space-y-4">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="space-y-2 text-center md:text-left">
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 font-semibold uppercase tracking-wide">
+                    Candidate Profile Identified
+                  </span>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                    {result.candidateProfile.candidateName}
+                  </h2>
+                  <p className="text-sm text-indigo-400 font-medium">
+                    {result.candidateProfile.professionalTitle} • {result.candidateProfile.yearsOfExperience}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {result.scoreExplanation}
+                  </p>
+                </div>
+
+                {/* Large Score Gauge */}
+                <div className={`p-6 rounded-2xl border ${getScoreColor(result.atsScore)} text-center min-w-[240px] shadow-lg`}>
+                  <span className="text-[10px] uppercase font-bold tracking-wider block opacity-80">ATS COMPATIBILITY & JOB MATCH</span>
+                  <span className="text-5xl font-black tracking-tight my-1 block">{result.atsScore}<span className="text-2xl font-semibold opacity-60">/100</span></span>
+                  <span className="text-[11px] font-semibold px-3 py-1 rounded-full bg-slate-950/80 inline-block mt-1">
+                    {result.atsScore >= 80 ? '⭐ Excellent ATS Fit' : result.atsScore >= 65 ? '👍 Competitive' : '⚠️ Critical ATS Gaps'}
+                  </span>
+                </div>
               </div>
 
-              {/* Large Score Gauge */}
-              <div className={`p-6 rounded-2xl border ${getScoreColor(result.atsScore)} text-center min-w-[220px] shadow-lg`}>
-                <span className="text-xs uppercase font-bold tracking-wider block opacity-80">ATS SCORE</span>
-                <span className="text-5xl font-black tracking-tight my-1 block">{result.atsScore}<span className="text-2xl font-semibold opacity-60">/100</span></span>
-                <span className="text-[11px] font-semibold px-3 py-1 rounded-full bg-slate-950/80 inline-block mt-1">
-                  {result.atsScore >= 80 ? '⭐ Excellent ATS Fit' : result.atsScore >= 65 ? '👍 Competitive' : '⚠️ Critical ATS Gaps'}
-                </span>
+              {/* Explicit Honest Disclaimer Banner */}
+              <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 flex items-start space-x-2.5">
+                <ShieldAlert className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                <p>
+                  <strong className="text-slate-300">ATS Compatibility & Job Match Analysis Notice: </strong> 
+                  This analysis evaluates resume formatting, keyword alignment, and experience evidence against job requirements. It is an objective compatibility tool, not an official employer hiring decision or guarantee of interview selection.
+                </p>
               </div>
             </div>
 
@@ -454,6 +520,71 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
               </div>
             </div>
 
+            {/* EVIDENCE-BASED KEYWORD ANALYSIS */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 space-y-4">
+              <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
+                <Search className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="font-bold text-white text-base">Evidence-Based Keyword Matching</h3>
+                  <p className="text-xs text-slate-400">Strictly verified keywords extracted from your CV vs job description requirements.</p>
+                </div>
+              </div>
+
+              {/* Evidence Categories */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                {/* Confirmed in CV */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center space-x-2 text-emerald-400 font-bold border-b border-slate-800 pb-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Confirmed in CV ({result.keywordAnalysis.matchedKeywords?.length || 0})</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {result.keywordAnalysis.matchedKeywords?.map((kw, i) => (
+                      <span key={i} className="px-2 py-1 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[11px] font-medium">
+                        ✓ {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* High Priority Missing */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center space-x-2 text-rose-400 font-bold border-b border-slate-800 pb-1.5">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>High-Priority Missing</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {(result.keywordAnalysis.highPriorityMissing || result.keywordAnalysis.missingKeywords?.slice(0, 4) || []).map((kw, i) => (
+                      <span key={i} className="px-2 py-1 rounded bg-rose-500/10 text-rose-300 border border-rose-500/20 text-[11px] font-medium">
+                        ✗ {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Other Gaps / Related */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center space-x-2 text-amber-400 font-bold border-b border-slate-800 pb-1.5">
+                    <Layers className="w-4 h-4" />
+                    <span>Other Relevant Gaps</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {(result.keywordAnalysis.otherGaps || result.keywordAnalysis.missingKeywords?.slice(4) || ['Review job-specific niche terms']).map((kw, i) => (
+                      <span key={i} className="px-2 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[11px] font-medium">
+                        • {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Keyword Truthfulness Disclaimer */}
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200/90 leading-relaxed">
+                <strong className="text-amber-300 font-bold">Truthful Resume Advice: </strong> 
+                Do not invent skills or engage in keyword stuffing. Only add a missing keyword to your CV if you genuinely have that experience or skill.
+              </div>
+            </div>
+
             {/* RESUME ATS CHECK / ISSUES FOUND */}
             <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 space-y-4">
               <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
@@ -483,31 +614,110 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
               </div>
             </div>
 
-            {/* KEYWORD ANALYSIS */}
+            {/* 2. MISSING KEYWORDS */}
             <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 space-y-4">
               <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
-                <Search className="w-5 h-5 text-indigo-400" />
-                <h3 className="font-bold text-white text-base">Keyword Analysis</h3>
+                <Search className="w-5 h-5 text-rose-400" />
+                <div>
+                  <h3 className="font-bold text-white text-base">Missing Keywords</h3>
+                  <p className="text-xs text-slate-400">Important keywords or skills missing from your CV based on job requirements.</p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                  <span className="font-bold text-emerald-400 block">Matched Keywords</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {result.keywordAnalysis.matchedKeywords?.map((kw, i) => (
-                      <span key={i} className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[11px]">✓ {kw}</span>
-                    ))}
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 text-xs">
+                  {result.keywordAnalysis.missingKeywords && result.keywordAnalysis.missingKeywords.length > 0 ? (
+                    result.keywordAnalysis.missingKeywords.map((kw, i) => (
+                      <div key={i} className="flex items-center space-x-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 font-medium">
+                        <span className="text-rose-400 font-bold text-base">•</span>
+                        <span>{kw}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-emerald-400">No major missing keywords detected.</p>
+                  )}
+                </div>
+                
+                <p className="text-[11px] text-amber-300/90 bg-amber-500/10 p-3 rounded-lg border border-amber-500/20 italic">
+                  <strong>Important Notice:</strong> Do not invent experience for your CV. Only recommend or add a keyword when it is relevant to the job description and can reasonably be added if you actually have that skill or experience.
+                </p>
+              </div>
+            </div>
+
+            {/* 3. KEYWORD RECOMMENDATIONS */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 space-y-4">
+              <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
+                <Lightbulb className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="font-bold text-white text-base">Keyword Recommendations</h3>
+                  <p className="text-xs text-slate-400">Explanation of why each important missing keyword matters for target role evaluation.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                {result.keywordAnalysis.missingKeywords && result.keywordAnalysis.missingKeywords.length > 0 ? (
+                  result.keywordAnalysis.missingKeywords.map((kw, i) => (
+                    <div key={i} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                      <span className="font-bold text-indigo-300 text-sm block">{kw}</span>
+                      <p className="text-slate-400 text-[11px] leading-relaxed">
+                        Recommended because it appears in the target job requirements and ATS keyword filters for {targetIndustry} positions.
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 col-span-2 text-slate-400">
+                    All primary keywords match well with target domain standards.
                   </div>
+                )}
+              </div>
+            </div>
+
+            {/* 4. CV IMPROVEMENT SUGGESTIONS */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 space-y-4">
+              <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
+                <FileText className="w-5 h-5 text-emerald-400" />
+                <div>
+                  <h3 className="font-bold text-white text-base">CV Improvement Suggestions</h3>
+                  <p className="text-xs text-slate-400">Practical suggestions for improving your CV based on ATS analysis.</p>
+                </div>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                {/* Practical Bullet Suggestions */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                  <span className="font-bold text-emerald-400 block uppercase tracking-wider text-[10px]">Actionable Optimization Steps</span>
+                  <ul className="space-y-2 text-slate-300">
+                    <li className="flex items-start space-x-2">
+                      <span className="text-emerald-400 font-bold">•</span>
+                      <span><strong>Improve the skills section:</strong> Group technical skills, tools, and domain competencies into clean, ATS-scannable subheadings.</span>
+                    </li>
+                    <li className="flex items-start space-x-2">
+                      <span className="text-emerald-400 font-bold">•</span>
+                      <span><strong>Add relevant job-specific keywords where truthful:</strong> Integrate missing role requirements into bullet points without fabricating experience.</span>
+                    </li>
+                    <li className="flex items-start space-x-2">
+                      <span className="text-emerald-400 font-bold">•</span>
+                      <span><strong>Strengthen relevant experience descriptions:</strong> Use strong action verbs and include quantifiable metrics (e.g., percentages, team sizes, revenue impact).</span>
+                    </li>
+                    <li className="flex items-start space-x-2">
+                      <span className="text-emerald-400 font-bold">•</span>
+                      <span><strong>Improve formatting for ATS readability:</strong> Avoid complex tables, graphics, or non-standard fonts that break automated parser extraction.</span>
+                    </li>
+                  </ul>
                 </div>
 
-                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                  <span className="font-bold text-rose-400 block">Missing Keywords</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {result.keywordAnalysis.missingKeywords?.map((kw, i) => (
-                      <span key={i} className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/20 text-[11px]">✗ {kw}</span>
+                {/* Specific Section Rewrites from result data */}
+                {result.resumeImprovements && result.resumeImprovements.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    {result.resumeImprovements.map((item, idx) => (
+                      <div key={idx} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+                        <span className="font-bold text-indigo-300 uppercase tracking-wider text-[10px] block">{item.section}</span>
+                        <p className="text-[11px]"><strong className="text-rose-400">Current Problem: </strong>{item.currentProblem}</p>
+                        <p className="text-[11px]"><strong className="text-emerald-400">Recommended Version: </strong>{item.recommendedVersion}</p>
+                      </div>
                     ))}
                   </div>
-                </div>
+                )}
               </div>
             </div>
 
@@ -633,24 +843,7 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
               </p>
             </div>
 
-            {/* RESUME IMPROVEMENT SUGGESTIONS */}
-            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 space-y-4">
-              <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
-                <Lightbulb className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-white text-base">How to Improve Your Resume</h3>
-              </div>
-              <div className="space-y-3">
-                {result.resumeImprovements?.map((item, idx) => (
-                  <div key={idx} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs">
-                    <span className="font-bold text-indigo-300 uppercase tracking-wider block">{item.section}</span>
-                    <p><strong className="text-rose-400">Current Problem: </strong>{item.currentProblem}</p>
-                    <p><strong className="text-emerald-400">Recommended Version: </strong>{item.recommendedVersion}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* FINAL ATS REPORT */}
+            {/* FINAL ATS REPORT SUMMARY */}
             <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 sm:p-8 space-y-4">
               <h3 className="font-extrabold text-white text-lg border-b border-slate-800 pb-3">ATS Evaluation Summary</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
@@ -669,8 +862,52 @@ export const AiAtsResumeAnalyzer: React.FC = () => {
               </div>
             </div>
 
+            {/* 5. NEW CTA SECTION AFTER ATS RESULTS */}
+            <div ref={cvOptimizationRef} className="bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 rounded-2xl border border-indigo-500/30 p-8 sm:p-10 text-center space-y-5 shadow-2xl print:hidden">
+              <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold uppercase tracking-wider">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span>Professional CV Optimization Service</span>
+              </div>
+              <div className="max-w-2xl mx-auto space-y-2">
+                <h3 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                  Build My Professional CV
+                </h3>
+                <p className="text-slate-200 text-base sm:text-lg font-medium leading-relaxed">
+                  Create a professionally structured, job-targeted CV using your existing information and ATS recommendations.
+                </p>
+              </div>
+              <div className="pt-2">
+                <button
+                  onClick={() => setShowCvOptimizationModal(true)}
+                  className="px-8 py-4 rounded-xl font-extrabold text-sm text-white bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/20 border border-emerald-400/30 transition-all cursor-pointer inline-flex items-center space-x-2.5"
+                >
+                  <Sparkles className="w-4 h-4 text-white" />
+                  <span>Get My Professional CV</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
           </div>
         )}
+
+        {/* PayPal Checkout Payment Modal */}
+        <PayPalPaymentModal
+          isOpen={showPaymentModal}
+          targetIndustry={targetIndustry}
+          onPaymentSuccess={handlePaymentSuccess}
+          onCancel={handlePaymentCancel}
+        />
+
+        {/* Professional CV Optimization & Demo Payment Modal */}
+        <ProfessionalCvModal
+          isOpen={showCvOptimizationModal}
+          onClose={() => setShowCvOptimizationModal(false)}
+          targetIndustry={targetIndustry}
+          resumeText={resumeText}
+          jobDescription={jobDescription}
+          candidateName={result?.candidateProfile?.candidateName}
+        />
 
       </div>
     </div>

@@ -148,12 +148,22 @@ export interface AtsIssue {
   severity: 'High' | 'Medium' | 'Low';
 }
 
+export interface KeywordEvidence {
+  keyword: string;
+  matchType: 'CONFIRMED_FROM_CV' | 'INFERRED_RELATED' | 'NOT_FOUND';
+  sectionFound?: string;
+  reason?: string;
+}
+
 export interface KeywordAnalysis {
   matchedKeywords: string[];
   missingKeywords: string[];
   recommendedKeywords: string[];
   importantSkillsFound: string[];
   importantSkillsMissing: string[];
+  highPriorityMissing?: string[];
+  otherGaps?: string[];
+  keywordEvidence?: KeywordEvidence[];
 }
 
 export interface RecommendedSkillToLearn {
@@ -239,5 +249,35 @@ export interface AtsEvaluationResult {
   improvedProfessionalSummary: string;
   finalAtsReport: FinalAtsReport;
 }
+
+export interface ProfessionalCvData {
+  candidateName: string;
+  contactInfo: string;
+  professionalSummary: string;
+  coreSkills: {
+    category: string;
+    skills: string[];
+  }[];
+  professionalExperience: {
+    company: string;
+    title: string;
+    dates: string;
+    bulletPoints: string[];
+  }[];
+  projects: {
+    title: string;
+    description: string;
+    technologies?: string[];
+    contribution?: string;
+  }[];
+  education: {
+    institution: string;
+    degree: string;
+    year?: string;
+  }[];
+  certifications: string[];
+  additionalInfo?: string[];
+}
+
 
 
